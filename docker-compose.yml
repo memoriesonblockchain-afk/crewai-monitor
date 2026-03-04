@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  api:
+    build: ./backend
+    ports:
+      - "8001:8000"  # Using 8001 externally to avoid conflict
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://crewai:crewai_pass@postgres:5432/crewai_monitor
+      - REDIS_URL=redis://redis:6379
+      - QUESTDB_HOST=questdb
+      - QUESTDB_PORT=9000
+      - SECRET_KEY=dev-secret-key-change-in-production
+      - DEBUG=true
+      - ENVIRONMENT=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      questdb:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"  # Using 5433 externally to avoid conflict
+    environment:
+      - POSTGRES_DB=crewai_monitor
+      - POSTGRES_USER=crewai
+      - POSTGRES_PASSWORD=crewai_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crewai -d crewai_monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # QuestDB for time-series data
+  questdb:
+    image: questdb/questdb:7.4.2
+    ports:
+      - "9000:9000"   # REST API and Web Console
+      - "9009:9009"   # InfluxDB Line Protocol
+      - "8812:8812"   # PostgreSQL wire protocol
+    volumes:
+      - questdb_data:/var/lib/questdb
+    environment:
+      - QDB_CAIRO_COMMIT_LAG=1000
+      - QDB_SHARED_WORKER_COUNT=2
+
+  # Redis for caching and pub/sub
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # Using 6380 externally to avoid conflict
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # Next.js Dashboard
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "3002:3000"  # Using 3002 externally to avoid conflict
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8001
+    depends_on:
+      - api
+
+  # Nginx Reverse Proxy (optional, for production)
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - api
+  #     - dashboard
+
+volumes:
+  postgres_data:
+  questdb_data:
+  redis_data:
