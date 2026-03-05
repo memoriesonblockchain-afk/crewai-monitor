@@ -18,12 +18,14 @@ import {
   LogOut,
   Shield,
   Bell,
+  Focus,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/dashboard/traces", label: "Traces", icon: List },
   { href: "/dashboard/live", label: "Live View", icon: Radio },
+  { href: "/dashboard/zoom", label: "Zoom View", icon: Focus },
   { href: "/dashboard/kill-switch", label: "Kill Switch", icon: Shield },
   { href: "/dashboard/alerts", label: "Alerts", icon: Bell },
   { href: "/dashboard/api-keys", label: "API Keys", icon: Key },
