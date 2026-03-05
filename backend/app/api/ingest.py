@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from .deps import CurrentAPIKey, DBSession
 from ..models.usage import UsageDaily
+from ..services.trace_store import trace_store
 
 router = APIRouter()
 
@@ -113,13 +114,28 @@ async def ingest_batch(
                 errors.append(f"Missing event_id or trace_id")
                 continue
 
-            # Store event (in production, this would go to QuestDB)
-            # For MVP, we'll just count and store to usage tracking
+            # Store event in trace store
+            trace_store.store_event(
+                user_id=str(api_key.user_id),
+                event_id=event.event_id,
+                trace_id=event.trace_id,
+                event_type=event.event_type,
+                timestamp=event.timestamp,
+                project_name=batch_request.project_name,
+                environment=batch_request.environment,
+                agent_role=event.agent_role,
+                task_description=event.task_description,
+                tool_name=event.tool_name,
+                tool_input=event.tool_input,
+                tool_result=event.tool_result,
+                duration_ms=event.duration_ms,
+                error=event.error,
+                error_message=event.error_message,
+                payload=event.payload,
+            )
+
             accepted += 1
             trace_ids.add(event.trace_id)
-
-            # TODO: Store to QuestDB
-            # await store_event_to_questdb(api_key.user_id, event)
 
         except Exception as e:
             rejected += 1
@@ -143,10 +159,6 @@ async def ingest_single(
     db: DBSession,
 ) -> BatchIngestResponse:
     """Ingest a single event (for testing)."""
-    # Wrap in batch request
-    batch = BatchIngestRequest(events=[event])
-
-    # Process
     accepted = 0
     rejected = 0
 
@@ -154,8 +166,26 @@ async def ingest_single(
         if not event.event_id or not event.trace_id:
             rejected = 1
         else:
+            # Store event in trace store
+            trace_store.store_event(
+                user_id=str(api_key.user_id),
+                event_id=event.event_id,
+                trace_id=event.trace_id,
+                event_type=event.event_type,
+                timestamp=event.timestamp,
+                project_name="default",
+                environment="development",
+                agent_role=event.agent_role,
+                task_description=event.task_description,
+                tool_name=event.tool_name,
+                tool_input=event.tool_input,
+                tool_result=event.tool_result,
+                duration_ms=event.duration_ms,
+                error=event.error,
+                error_message=event.error_message,
+                payload=event.payload,
+            )
             accepted = 1
-            # TODO: Store to QuestDB
             await update_usage(db, api_key.id, 1, 1, 0)
     except Exception:
         rejected = 1

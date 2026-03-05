@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from .deps import CurrentUser, DBSession
+from ..services.trace_store import trace_store, StoredEvent, StoredTrace
 
 router = APIRouter()
 
@@ -20,10 +21,14 @@ class TraceEvent(BaseModel):
     event_type: str
     timestamp: datetime
     agent_role: str | None = None
+    task_description: str | None = None
     tool_name: str | None = None
+    tool_input: dict[str, Any] | None = None
+    tool_result: str | None = None
     duration_ms: float | None = None
     error: bool = False
     error_message: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class TraceSummary(BaseModel):
@@ -76,11 +81,42 @@ class MetricsSummary(BaseModel):
     top_tools: list[dict[str, Any]]
 
 
-# In-memory trace storage for MVP (in production, use QuestDB)
-_traces: dict[str, dict[str, Any]] = {}
+# Helper functions
+def _stored_trace_to_summary(trace: StoredTrace) -> TraceSummary:
+    """Convert a StoredTrace to TraceSummary."""
+    return TraceSummary(
+        trace_id=trace.trace_id,
+        project_name=trace.project_name,
+        environment=trace.environment,
+        started_at=trace.started_at,
+        ended_at=trace.ended_at,
+        status=trace.status,
+        event_count=trace.event_count,
+        agent_count=trace.agent_count,
+        error_count=trace.error_count,
+        duration_ms=trace.duration_ms,
+    )
 
 
-# Endpoints
+def _stored_event_to_trace_event(event: StoredEvent) -> TraceEvent:
+    """Convert a StoredEvent to TraceEvent."""
+    return TraceEvent(
+        event_id=event.event_id,
+        trace_id=event.trace_id,
+        event_type=event.event_type,
+        timestamp=event.timestamp,
+        agent_role=event.agent_role,
+        task_description=event.task_description,
+        tool_name=event.tool_name,
+        tool_input=event.tool_input,
+        tool_result=event.tool_result,
+        duration_ms=event.duration_ms,
+        error=event.error,
+        error_message=event.error_message,
+        payload=event.payload,
+    )
+
+
 @router.get("", response_model=TraceListResponse)
 async def list_traces(
     user: CurrentUser,
@@ -101,39 +137,22 @@ async def list_traces(
     - from_time: Start of time range
     - to_time: End of time range
     """
-    # For MVP, return mock data
-    # In production, query QuestDB
+    user_id = str(user.id)
+    offset = (page - 1) * page_size
 
-    mock_traces = [
-        TraceSummary(
-            trace_id="trace-001",
-            project_name="demo-project",
-            environment="development",
-            started_at=datetime.now(timezone.utc),
-            ended_at=None,
-            status="running",
-            event_count=42,
-            agent_count=3,
-            error_count=0,
-            duration_ms=None,
-        ),
-        TraceSummary(
-            trace_id="trace-002",
-            project_name="demo-project",
-            environment="development",
-            started_at=datetime.now(timezone.utc),
-            ended_at=datetime.now(timezone.utc),
-            status="completed",
-            event_count=128,
-            agent_count=5,
-            error_count=2,
-            duration_ms=45320.5,
-        ),
-    ]
+    traces, total = trace_store.get_traces(
+        user_id=user_id,
+        status=status,
+        agent=agent,
+        limit=page_size,
+        offset=offset,
+    )
+
+    trace_summaries = [_stored_trace_to_summary(t) for t in traces]
 
     return TraceListResponse(
-        traces=mock_traces,
-        total=len(mock_traces),
+        traces=trace_summaries,
+        total=total,
         page=page,
         page_size=page_size,
     )
@@ -146,44 +165,29 @@ async def get_trace(
     db: DBSession,
 ) -> TraceDetail:
     """Get detailed information about a specific trace."""
-    # For MVP, return mock data
-    # In production, query QuestDB
+    user_id = str(user.id)
 
-    mock_events = [
-        TraceEvent(
-            event_id="evt-001",
-            trace_id=trace_id,
-            event_type="crew_started",
-            timestamp=datetime.now(timezone.utc),
-        ),
-        TraceEvent(
-            event_id="evt-002",
-            trace_id=trace_id,
-            event_type="agent_started",
-            timestamp=datetime.now(timezone.utc),
-            agent_role="Researcher",
-        ),
-        TraceEvent(
-            event_id="evt-003",
-            trace_id=trace_id,
-            event_type="tool_started",
-            timestamp=datetime.now(timezone.utc),
-            agent_role="Researcher",
-            tool_name="search_web",
-        ),
-    ]
+    trace = trace_store.get_trace(user_id, trace_id)
+
+    if not trace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Trace {trace_id} not found",
+        )
+
+    events = [_stored_event_to_trace_event(e) for e in trace.events]
 
     return TraceDetail(
-        trace_id=trace_id,
-        project_name="demo-project",
-        environment="development",
-        started_at=datetime.now(timezone.utc),
-        ended_at=None,
-        status="running",
-        events=mock_events,
-        agents=["Researcher", "Writer", "Editor"],
-        tools_used=["search_web", "read_file", "write_file"],
-        error_count=0,
+        trace_id=trace.trace_id,
+        project_name=trace.project_name,
+        environment=trace.environment,
+        started_at=trace.started_at,
+        ended_at=trace.ended_at,
+        status=trace.status,
+        events=events,
+        agents=trace.agents,
+        tools_used=trace.tools_used,
+        error_count=trace.error_count,
     )
 
 
@@ -198,8 +202,18 @@ async def get_trace_events(
     offset: int = Query(default=0, ge=0),
 ) -> list[TraceEvent]:
     """Get events for a specific trace with filtering."""
-    # For MVP, return mock data
-    return []
+    user_id = str(user.id)
+
+    events = trace_store.get_trace_events(
+        user_id=user_id,
+        trace_id=trace_id,
+        event_type=event_type,
+        agent=agent,
+        limit=limit,
+        offset=offset,
+    )
+
+    return [_stored_event_to_trace_event(e) for e in events]
 
 
 @router.get("/metrics/summary", response_model=MetricsSummary)
@@ -210,18 +224,17 @@ async def get_metrics_summary(
     to_time: datetime | None = None,
 ) -> MetricsSummary:
     """Get aggregated metrics summary."""
-    # For MVP, return mock data
+    user_id = str(user.id)
+
+    metrics = trace_store.get_metrics(user_id)
+
     return MetricsSummary(
-        total_traces=156,
-        total_events=12847,
-        total_errors=23,
-        avg_duration_ms=32150.5,
-        active_agents=8,
-        top_tools=[
-            {"name": "search_web", "count": 542},
-            {"name": "read_file", "count": 321},
-            {"name": "write_file", "count": 198},
-        ],
+        total_traces=metrics["total_traces"],
+        total_events=metrics["total_events"],
+        total_errors=metrics["total_errors"],
+        avg_duration_ms=metrics["avg_duration_ms"],
+        active_agents=metrics["active_agents"],
+        top_tools=metrics["top_tools"],
     )
 
 
@@ -231,8 +244,8 @@ async def list_agents(
     db: DBSession,
 ) -> list[str]:
     """List all unique agent roles seen."""
-    # For MVP, return mock data
-    return ["Researcher", "Writer", "Editor", "Reviewer", "Publisher"]
+    user_id = str(user.id)
+    return trace_store.get_all_agents(user_id)
 
 
 @router.get("/tools", response_model=list[str])
@@ -241,5 +254,5 @@ async def list_tools(
     db: DBSession,
 ) -> list[str]:
     """List all unique tools used."""
-    # For MVP, return mock data
-    return ["search_web", "read_file", "write_file", "execute_code", "send_email"]
+    user_id = str(user.id)
+    return trace_store.get_all_tools(user_id)

@@ -37,6 +37,36 @@ interface Message {
   truncated?: boolean;
 }
 
+// API response types
+interface TraceEvent {
+  event_id: string;
+  trace_id: string;
+  event_type: string;
+  timestamp: string;
+  agent_role: string | null;
+  task_description: string | null;
+  tool_name: string | null;
+  tool_input: Record<string, unknown> | null;
+  tool_result: string | null;
+  duration_ms: number | null;
+  error: boolean;
+  error_message: string | null;
+  payload: Record<string, unknown>;
+}
+
+interface TraceDetail {
+  trace_id: string;
+  project_name: string;
+  environment: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  events: TraceEvent[];
+  agents: string[];
+  tools_used: string[];
+  error_count: number;
+}
+
 interface Span {
   id: string;
   traceId: string;
@@ -51,7 +81,116 @@ interface Span {
   children: Span[];
 }
 
-// Mock data generator for realistic spans with full telemetry
+// Transform API events into spans
+function transformEventsToSpans(events: TraceEvent[], traceId: string): Span[] {
+  const spans: Span[] = [];
+  const openSpans: Map<string, { event: TraceEvent; spanId: string; parentSpanId: string | null }> = new Map();
+  const parentStack: string[] = []; // Stack of span IDs for parent tracking
+
+  // Sort events by timestamp
+  const sortedEvents = [...events].sort((a, b) =>
+    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+
+  let spanCounter = 0;
+
+  for (const event of sortedEvents) {
+    const eventBase = event.event_type.replace(/_started|_completed|_failed/g, "");
+    const isStart = event.event_type.endsWith("_started");
+    const isEnd = event.event_type.endsWith("_completed") || event.event_type.endsWith("_failed");
+
+    // Determine span type
+    let spanType: Span["type"] = "crew";
+    if (eventBase === "agent") spanType = "agent";
+    else if (eventBase === "task") spanType = "task";
+    else if (eventBase === "tool") spanType = "tool";
+    else if (eventBase === "llm") spanType = "llm";
+    else if (eventBase === "crew") spanType = "crew";
+
+    // Create a unique key for matching start/end events
+    const eventKey = `${eventBase}_${event.agent_role || ""}_${event.tool_name || ""}_${event.task_description?.slice(0, 50) || ""}`;
+
+    if (isStart) {
+      // Create a new span
+      spanCounter++;
+      const spanId = `span-${spanCounter.toString().padStart(3, "0")}`;
+      const parentSpanId = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
+
+      openSpans.set(eventKey, { event, spanId, parentSpanId });
+      parentStack.push(spanId);
+
+      // Create span name based on type
+      let name = eventBase.charAt(0).toUpperCase() + eventBase.slice(1);
+      if (event.agent_role) name = `Agent: ${event.agent_role}`;
+      else if (event.tool_name) name = `Tool: ${event.tool_name}`;
+      else if (event.task_description) name = `Task: ${event.task_description.slice(0, 30)}...`;
+      else if (spanType === "llm") name = "LLM Call";
+      else if (spanType === "crew") name = "Crew Execution";
+
+      // Build attributes from payload and event fields
+      const attributes: Record<string, unknown> = { ...event.payload };
+      if (event.agent_role) attributes.role = event.agent_role;
+      if (event.task_description) attributes.description = event.task_description;
+      if (event.tool_name) attributes.tool_name = event.tool_name;
+      if (event.tool_input) attributes.input = event.tool_input;
+      if (event.tool_result) attributes.output = event.tool_result;
+      if (event.error_message) attributes.error = event.error_message;
+
+      const span: Span = {
+        id: spanId,
+        traceId,
+        parentId: parentSpanId,
+        name,
+        type: spanType,
+        startTime: new Date(event.timestamp).getTime(),
+        endTime: new Date(event.timestamp).getTime(), // Will be updated when end event arrives
+        duration: 0,
+        status: "running",
+        attributes,
+        children: [],
+      };
+
+      spans.push(span);
+    } else if (isEnd) {
+      // Find and update the matching start span
+      const openSpan = openSpans.get(eventKey);
+      if (openSpan) {
+        const span = spans.find(s => s.id === openSpan.spanId);
+        if (span) {
+          span.endTime = new Date(event.timestamp).getTime();
+          span.duration = span.endTime - span.startTime;
+          span.status = event.error || event.event_type.endsWith("_failed") ? "error" : "success";
+
+          // Merge end event payload (e.g., response, tokens, cost from llm_completed)
+          if (event.payload) {
+            Object.assign(span.attributes, event.payload);
+          }
+          if (event.tool_result) span.attributes.output = event.tool_result;
+          if (event.error_message) span.attributes.error = event.error_message;
+          if (event.duration_ms) span.duration = event.duration_ms;
+        }
+
+        openSpans.delete(eventKey);
+        // Pop from parent stack
+        const idx = parentStack.indexOf(openSpan.spanId);
+        if (idx >= 0) parentStack.splice(idx, 1);
+      }
+    }
+  }
+
+  // Mark any still-open spans as running
+  Array.from(openSpans.values()).forEach(({ spanId }) => {
+    const span = spans.find(s => s.id === spanId);
+    if (span) {
+      span.endTime = Date.now();
+      span.duration = span.endTime - span.startTime;
+    }
+  });
+
+  return spans;
+}
+
+// Fallback: Mock data generator for realistic spans with full telemetry
 function generateMockSpans(traceId: string): Span[] {
   const baseTime = Date.now() - 45000; // 45 seconds ago
 
@@ -1138,6 +1277,8 @@ export default function SpanViewPage() {
   const [expandedSpans, setExpandedSpans] = useState<Set<string>>(new Set());
   const [selectedSpan, setSelectedSpan] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [useMockData, setUseMockData] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -1145,14 +1286,52 @@ export default function SpanViewPage() {
       return;
     }
 
-    // Load mock spans
-    const mockSpans = generateMockSpans(traceId);
-    setSpans(mockSpans);
-    setSpanTree(buildSpanTree(mockSpans));
+    const fetchTraceData = async () => {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+        const response = await fetch(`${apiUrl}/v1/traces/${traceId}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
-    // Expand all by default
-    setExpandedSpans(new Set(mockSpans.map((s) => s.id)));
-    setLoading(false);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch trace: ${response.status}`);
+        }
+
+        const data: TraceDetail = await response.json();
+
+        if (data.events && data.events.length > 0) {
+          // Transform API events into spans
+          const transformedSpans = transformEventsToSpans(data.events, traceId);
+          setSpans(transformedSpans);
+          setSpanTree(buildSpanTree(transformedSpans));
+          setExpandedSpans(new Set(transformedSpans.map((s) => s.id)));
+          setUseMockData(false);
+        } else {
+          // No events, fall back to mock data for demo purposes
+          console.log("No events found, using mock data");
+          const mockSpans = generateMockSpans(traceId);
+          setSpans(mockSpans);
+          setSpanTree(buildSpanTree(mockSpans));
+          setExpandedSpans(new Set(mockSpans.map((s) => s.id)));
+          setUseMockData(true);
+        }
+      } catch (err) {
+        console.error("Error fetching trace:", err);
+        // Fall back to mock data on error
+        const mockSpans = generateMockSpans(traceId);
+        setSpans(mockSpans);
+        setSpanTree(buildSpanTree(mockSpans));
+        setExpandedSpans(new Set(mockSpans.map((s) => s.id)));
+        setUseMockData(true);
+        setError(err instanceof Error ? err.message : "Failed to fetch trace data");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTraceData();
   }, [token, router, traceId]);
 
   const toggleSpan = (id: string) => {
@@ -1241,6 +1420,18 @@ export default function SpanViewPage() {
           </Button>
         </div>
       </div>
+
+      {/* Mock data indicator */}
+      {useMockData && (
+        <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-yellow-600" />
+          <span className="text-sm text-yellow-800 dark:text-yellow-200">
+            {error
+              ? `Using demo data: ${error}`
+              : "No trace events found. Showing demo data for preview."}
+          </span>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
