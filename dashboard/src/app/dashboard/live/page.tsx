@@ -111,8 +111,9 @@ export default function LiveViewPage() {
   }, [token, autoRefresh, refreshInterval, selectedTrace]);
 
   // Simulate live events (in production, this would be WebSocket)
+  // For demo, simulate events even without a running trace
   useEffect(() => {
-    if (!autoRefresh || !selectedTrace) return;
+    if (!autoRefresh) return;
 
     const eventTemplates: Omit<LiveEvent, "id" | "timestamp">[] = [
       // LLM Events
@@ -502,7 +503,9 @@ export default function LiveViewPage() {
               )}
             </CardTitle>
             <CardDescription>
-              Live events from {selectedTrace ? "selected trace" : "all traces"}
+              {runningTraces.length === 0
+                ? "Demo mode - simulated events"
+                : `Live events from ${selectedTrace ? "selected trace" : "all traces"}`}
             </CardDescription>
           </CardHeader>
           <CardContent>
