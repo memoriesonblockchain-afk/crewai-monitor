@@ -1,6 +1,5 @@
 # Render.com Blueprint Specification
-# Deploy: Connect your GitHub repo to Render and use this blueprint
-# Docs: https://render.com/docs/blueprint-spec
+# https://render.com/docs/blueprint-spec
 
 services:
   # FastAPI Backend API
@@ -18,11 +17,6 @@ services:
         fromDatabase:
           name: crewai-monitor-db
           property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: crewai-monitor-redis
-          type: redis
-          property: connectionString
       - key: SECRET_KEY
         generateValue: true
       - key: DEBUG
@@ -30,7 +24,7 @@ services:
       - key: ENVIRONMENT
         value: "production"
       - key: CORS_ORIGINS
-        sync: false  # Set manually after deployment
+        value: "https://crewai-monitor-dashboard.onrender.com,http://localhost:3000"
 
   # Next.js Dashboard
   - type: web
@@ -43,18 +37,10 @@ services:
     startCommand: npm start
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        sync: false  # Set manually to the API URL after deployment
+        value: "https://crewai-monitor-api.onrender.com"
       - key: NODE_ENV
         value: "production"
 
-  # Redis for caching and pub/sub
-  - type: redis
-    name: crewai-monitor-redis
-    region: oregon
-    plan: free
-    maxmemoryPolicy: allkeys-lru
-
-# PostgreSQL Database
 databases:
   - name: crewai-monitor-db
     region: oregon
