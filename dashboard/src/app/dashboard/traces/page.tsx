@@ -15,7 +15,87 @@ import {
   Filter,
   ChevronRight,
   RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
+
+// Generate demo traces for showcase when no real traces exist
+function generateDemoTraces(): TraceSummary[] {
+  const now = new Date();
+  return [
+    {
+      trace_id: "trace-demo-research-001",
+      project_name: "AI Research Crew",
+      environment: "production",
+      started_at: new Date(now.getTime() - 5 * 60000).toISOString(), // 5 min ago
+      ended_at: new Date(now.getTime() - 2 * 60000).toISOString(),
+      status: "completed",
+      event_count: 34,
+      agent_count: 3,
+      error_count: 0,
+      duration_ms: 180000,
+    },
+    {
+      trace_id: "trace-demo-content-002",
+      project_name: "Content Generation Crew",
+      environment: "production",
+      started_at: new Date(now.getTime() - 15 * 60000).toISOString(),
+      ended_at: new Date(now.getTime() - 8 * 60000).toISOString(),
+      status: "completed",
+      event_count: 28,
+      agent_count: 2,
+      error_count: 1,
+      duration_ms: 420000,
+    },
+    {
+      trace_id: "trace-demo-analysis-003",
+      project_name: "Data Analysis Crew",
+      environment: "staging",
+      started_at: new Date(now.getTime() - 2 * 60000).toISOString(),
+      ended_at: null,
+      status: "running",
+      event_count: 12,
+      agent_count: 4,
+      error_count: 0,
+      duration_ms: null,
+    },
+    {
+      trace_id: "trace-demo-support-004",
+      project_name: "Customer Support Crew",
+      environment: "production",
+      started_at: new Date(now.getTime() - 30 * 60000).toISOString(),
+      ended_at: new Date(now.getTime() - 25 * 60000).toISOString(),
+      status: "completed",
+      event_count: 45,
+      agent_count: 3,
+      error_count: 0,
+      duration_ms: 300000,
+    },
+    {
+      trace_id: "trace-demo-code-005",
+      project_name: "Code Review Crew",
+      environment: "development",
+      started_at: new Date(now.getTime() - 60 * 60000).toISOString(),
+      ended_at: new Date(now.getTime() - 58 * 60000).toISOString(),
+      status: "failed",
+      event_count: 18,
+      agent_count: 2,
+      error_count: 3,
+      duration_ms: 120000,
+    },
+    {
+      trace_id: "trace-demo-marketing-006",
+      project_name: "Marketing Analysis Crew",
+      environment: "production",
+      started_at: new Date(now.getTime() - 120 * 60000).toISOString(),
+      ended_at: new Date(now.getTime() - 110 * 60000).toISOString(),
+      status: "completed",
+      event_count: 52,
+      agent_count: 4,
+      error_count: 0,
+      duration_ms: 600000,
+    },
+  ];
+}
 
 export default function TracesPage() {
   const token = useAuthStore((state) => state.token);
@@ -23,6 +103,7 @@ export default function TracesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [useDemoData, setUseDemoData] = useState(false);
 
   const fetchTraces = async () => {
     if (!token) return;
@@ -31,9 +112,20 @@ export default function TracesPage() {
       const params: Record<string, string> = { page_size: "50" };
       if (statusFilter) params.status = statusFilter;
       const data = await tracesAPI.list(token, params);
-      setTraces(data.traces);
+
+      if (data.traces.length === 0 && !statusFilter) {
+        // No traces found, use demo data
+        setTraces(generateDemoTraces());
+        setUseDemoData(true);
+      } else {
+        setTraces(data.traces);
+        setUseDemoData(false);
+      }
     } catch (error) {
       console.error("Failed to fetch traces:", error);
+      // On error, show demo data
+      setTraces(generateDemoTraces());
+      setUseDemoData(true);
     } finally {
       setLoading(false);
     }
@@ -43,7 +135,13 @@ export default function TracesPage() {
     fetchTraces();
   }, [token, statusFilter]);
 
-  const filteredTraces = traces.filter((trace) =>
+  // Filter demo traces by status if needed
+  let displayTraces = traces;
+  if (useDemoData && statusFilter) {
+    displayTraces = traces.filter(t => t.status === statusFilter);
+  }
+
+  const filteredTraces = displayTraces.filter((trace) =>
     search
       ? trace.project_name.toLowerCase().includes(search.toLowerCase()) ||
         trace.trace_id.includes(search)
@@ -64,6 +162,16 @@ export default function TracesPage() {
           Refresh
         </Button>
       </div>
+
+      {/* Demo mode indicator */}
+      {useDemoData && (
+        <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-yellow-600" />
+          <span className="text-sm text-yellow-800 dark:text-yellow-200">
+            Demo mode: Showing sample traces. Ingest real events with the SDK to see your data.
+          </span>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex gap-4">
@@ -114,6 +222,7 @@ export default function TracesPage() {
           <CardTitle>All Traces</CardTitle>
           <CardDescription>
             {filteredTraces.length} traces found
+            {useDemoData && " (demo data)"}
           </CardDescription>
         </CardHeader>
         <CardContent>
