@@ -23,7 +23,7 @@ services:
         value: "false"
       - key: ENVIRONMENT
         value: "production"
-      - key: CORS_ORIGINS
+      - key: CORS_ORIGINS_STR
         value: "https://crewai-monitor-dashboard.onrender.com,http://localhost:3000"
 
   # Next.js Dashboard

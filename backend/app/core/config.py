@@ -24,15 +24,12 @@ class Settings(BaseSettings):
 
     # API
     api_prefix: str = "/v1"
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3002", "http://localhost:8000", "http://localhost:8001"]
+    cors_origins_str: str = "http://localhost:3000,http://localhost:3002,http://localhost:8000,http://localhost:8001"
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from comma-separated string or list."""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parse CORS origins from comma-separated string."""
+        return [origin.strip() for origin in self.cors_origins_str.split(",")]
 
     # Database - PostgreSQL
     database_url: str = "postgresql+asyncpg://user:pass@localhost:5432/crewai_monitor"
