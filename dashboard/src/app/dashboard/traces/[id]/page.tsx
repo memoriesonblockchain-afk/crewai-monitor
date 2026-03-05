@@ -24,6 +24,125 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
+// Demo trace configurations
+const demoTraceConfigs: Record<string, { name: string; status: string; agents: string[]; tools: string[] }> = {
+  "trace-demo-research-001": {
+    name: "AI Research Crew",
+    status: "completed",
+    agents: ["Senior Researcher", "Technical Writer", "Senior Editor"],
+    tools: ["web_search", "arxiv_search", "rag_query", "write_file"],
+  },
+  "trace-demo-content-002": {
+    name: "Content Generation Crew",
+    status: "completed",
+    agents: ["Content Strategist", "Copywriter"],
+    tools: ["web_search", "write_file", "seo_analyzer"],
+  },
+  "trace-demo-analysis-003": {
+    name: "Data Analysis Crew",
+    status: "running",
+    agents: ["Data Analyst", "Statistician", "Visualizer", "Report Writer"],
+    tools: ["sql_query", "python_exec", "chart_generator", "export_csv"],
+  },
+  "trace-demo-support-004": {
+    name: "Customer Support Crew",
+    status: "completed",
+    agents: ["Support Agent", "Escalation Manager", "Knowledge Base Expert"],
+    tools: ["ticket_search", "knowledge_lookup", "send_email"],
+  },
+  "trace-demo-code-005": {
+    name: "Code Review Crew",
+    status: "failed",
+    agents: ["Code Reviewer", "Security Analyst"],
+    tools: ["git_diff", "lint_code", "security_scan"],
+  },
+  "trace-demo-marketing-006": {
+    name: "Marketing Analysis Crew",
+    status: "completed",
+    agents: ["Market Analyst", "Competitor Researcher", "Strategy Lead", "Report Writer"],
+    tools: ["market_data", "social_analytics", "competitor_analysis", "report_generator"],
+  },
+};
+
+// Generate demo trace detail with events
+function generateDemoTrace(traceId: string): TraceDetail | null {
+  const config = demoTraceConfigs[traceId];
+  if (!config) return null;
+
+  const now = new Date();
+  const startTime = new Date(now.getTime() - 300000); // 5 min ago
+  let eventTime = startTime.getTime();
+
+  const events: TraceEvent[] = [];
+  let eventCounter = 1;
+
+  const addEvent = (type: string, agent?: string, tool?: string, duration?: number, error?: boolean, errorMsg?: string) => {
+    events.push({
+      event_id: `evt-demo-${eventCounter++}`,
+      trace_id: traceId,
+      event_type: type,
+      timestamp: new Date(eventTime).toISOString(),
+      agent_role: agent || null,
+      tool_name: tool || null,
+      duration_ms: duration || null,
+      error: error || false,
+      error_message: errorMsg || null,
+    });
+    eventTime += Math.random() * 5000 + 1000; // 1-6 seconds between events
+  };
+
+  // Crew started
+  addEvent("crew_started");
+
+  // Generate events for each agent
+  config.agents.forEach((agent, agentIdx) => {
+    addEvent("agent_started", agent);
+
+    // Each agent does some work
+    const agentTools = config.tools.slice(agentIdx % config.tools.length, (agentIdx % config.tools.length) + 2);
+    agentTools.forEach(tool => {
+      addEvent("tool_started", agent, tool);
+      if (config.status === "failed" && tool === "security_scan") {
+        addEvent("tool_error", agent, tool, 1500, true, "Security vulnerability detected: SQL injection risk in user input handling");
+      } else {
+        addEvent("tool_finished", agent, tool, Math.floor(Math.random() * 3000) + 500);
+      }
+    });
+
+    // LLM call
+    addEvent("llm_started", agent);
+    addEvent("llm_completed", agent, undefined, Math.floor(Math.random() * 5000) + 2000);
+
+    // Agent completion
+    if (config.status === "failed" && agentIdx === config.agents.length - 1) {
+      addEvent("agent_error", agent, undefined, undefined, true, "Agent failed due to upstream tool error");
+    } else {
+      addEvent("agent_completed", agent, undefined, Math.floor(Math.random() * 20000) + 10000);
+    }
+  });
+
+  // Crew completion
+  if (config.status === "failed") {
+    addEvent("crew_failed", undefined, undefined, undefined, true, "Crew execution failed");
+  } else if (config.status === "completed") {
+    addEvent("crew_completed", undefined, undefined, 180000);
+  }
+  // Running traces don't have completion event
+
+  return {
+    trace_id: traceId,
+    project_name: config.name,
+    environment: "production",
+    started_at: startTime.toISOString(),
+    ended_at: config.status === "running" ? null : new Date(eventTime).toISOString(),
+    status: config.status,
+    events,
+    agents: config.agents,
+    tools_used: config.tools,
+    error_count: config.status === "failed" ? 3 : config.name.includes("Content") ? 1 : 0,
+  };
+}
+
 const eventIcons: Record<string, React.ReactNode> = {
   crew_started: <Activity className="h-4 w-4" />,
   crew_completed: <CheckCircle className="h-4 w-4 text-green-500" />,
@@ -51,24 +170,46 @@ export default function TraceDetailPage() {
   const [trace, setTrace] = useState<TraceDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [killingAgent, setKillingAgent] = useState<string | null>(null);
+  const [useDemoData, setUseDemoData] = useState(false);
 
   useEffect(() => {
     async function fetchTrace() {
       if (!token || !traceId) return;
 
+      // Check if this is a demo trace ID
+      if (traceId.startsWith("trace-demo-")) {
+        const demoTrace = generateDemoTrace(traceId);
+        if (demoTrace) {
+          setTrace(demoTrace);
+          setUseDemoData(true);
+          setLoading(false);
+          return;
+        }
+      }
+
       try {
         const data = await tracesAPI.get(token, traceId);
         setTrace(data);
+        setUseDemoData(false);
       } catch (error) {
         console.error("Failed to fetch trace:", error);
+        // Try demo data as fallback
+        const demoTrace = generateDemoTrace(traceId);
+        if (demoTrace) {
+          setTrace(demoTrace);
+          setUseDemoData(true);
+        }
       } finally {
         setLoading(false);
       }
     }
 
     fetchTrace();
-    const interval = setInterval(fetchTrace, 5000);
-    return () => clearInterval(interval);
+    // Only poll for real traces
+    if (!traceId.startsWith("trace-demo-")) {
+      const interval = setInterval(fetchTrace, 5000);
+      return () => clearInterval(interval);
+    }
   }, [token, traceId]);
 
   const handleKillAgent = async (agentRole: string) => {
@@ -113,6 +254,16 @@ export default function TraceDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* Demo mode indicator */}
+      {useDemoData && (
+        <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-yellow-600" />
+          <span className="text-sm text-yellow-800 dark:text-yellow-200">
+            Demo mode: Showing sample trace data for preview.
+          </span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-4">
         <Link href="/dashboard/traces">
