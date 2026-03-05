@@ -20,6 +20,7 @@ import {
   CheckCircle,
   XCircle,
   Shield,
+  BarChart3,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -128,6 +129,12 @@ export default function TraceDetailPage() {
             <code className="text-sm">{trace.trace_id}</code>
           </p>
         </div>
+        <Link href={`/dashboard/traces/${traceId}/spans`}>
+          <Button variant="outline" className="gap-2">
+            <BarChart3 className="h-4 w-4" />
+            Span View
+          </Button>
+        </Link>
       </div>
 
       {/* Stats */}
