@@ -3,6 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,8 +26,27 @@ class Settings(BaseSettings):
     api_prefix: str = "/v1"
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3002", "http://localhost:8000", "http://localhost:8001"]
 
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Parse CORS origins from comma-separated string or list."""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",")]
+        return v
+
     # Database - PostgreSQL
     database_url: str = "postgresql+asyncpg://user:pass@localhost:5432/crewai_monitor"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def fix_postgres_url(cls, v):
+        """Convert postgres:// to postgresql+asyncpg:// for SQLAlchemy."""
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif v.startswith("postgresql://") and "+asyncpg" not in v:
+                v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # Database - QuestDB
     questdb_host: str = "localhost"

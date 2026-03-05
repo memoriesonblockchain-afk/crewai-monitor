@@ -1,0 +1,63 @@
+# Render.com Blueprint Specification
+# Deploy: Connect your GitHub repo to Render and use this blueprint
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # FastAPI Backend API
+  - type: web
+    name: crewai-monitor-api
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: crewai-monitor-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: crewai-monitor-redis
+          type: redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "false"
+      - key: ENVIRONMENT
+        value: "production"
+      - key: CORS_ORIGINS
+        sync: false  # Set manually after deployment
+
+  # Next.js Dashboard
+  - type: web
+    name: crewai-monitor-dashboard
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: dashboard
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false  # Set manually to the API URL after deployment
+      - key: NODE_ENV
+        value: "production"
+
+  # Redis for caching and pub/sub
+  - type: redis
+    name: crewai-monitor-redis
+    region: oregon
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
+# PostgreSQL Database
+databases:
+  - name: crewai-monitor-db
+    region: oregon
+    plan: free
+    databaseName: crewai_monitor
+    user: crewai
