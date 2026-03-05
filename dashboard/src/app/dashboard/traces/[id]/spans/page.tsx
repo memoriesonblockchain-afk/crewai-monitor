@@ -5,6 +5,12 @@ import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAuthStore } from "@/lib/store";
 import {
   ArrowLeft,
@@ -18,7 +24,18 @@ import {
   XCircle,
   ChevronDown,
   ChevronRight,
+  Copy,
+  Check,
+  Zap,
+  DollarSign,
+  Hash,
 } from "lucide-react";
+
+interface Message {
+  role: string;
+  content: string;
+  truncated?: boolean;
+}
 
 interface Span {
   id: string;
@@ -34,7 +51,7 @@ interface Span {
   children: Span[];
 }
 
-// Mock data generator for realistic spans
+// Mock data generator for realistic spans with full telemetry
 function generateMockSpans(traceId: string): Span[] {
   const baseTime = Date.now() - 45000; // 45 seconds ago
 
@@ -52,6 +69,7 @@ function generateMockSpans(traceId: string): Span[] {
       attributes: {
         crew_name: "Research Crew",
         inputs: { topic: "AI Trends 2024" },
+        output: "Successfully completed research and report generation on AI Trends 2024. The report covers key areas including generative AI, multimodal models, and enterprise AI adoption.",
       },
       children: [],
     },
@@ -67,8 +85,11 @@ function generateMockSpans(traceId: string): Span[] {
       status: "success",
       attributes: {
         role: "Researcher",
-        goal: "Find comprehensive information about AI trends",
+        goal: "Find comprehensive information about AI trends and compile research findings",
+        backstory: "You are an expert AI researcher with 10 years of experience tracking industry trends and technological advancements.",
         model: "gpt-4",
+        tools: ["web_search", "read_file", "scrape_website"],
+        allow_delegation: false,
       },
       children: [],
     },
@@ -83,7 +104,9 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 17300,
       status: "success",
       attributes: {
-        description: "Research the latest AI trends and compile findings",
+        description: "Research the latest AI trends for 2024 and compile comprehensive findings including market analysis, key players, and emerging technologies.",
+        expected_output: "A detailed research summary with citations and key statistics",
+        assigned_agent: "Researcher",
       },
       children: [],
     },
@@ -99,8 +122,8 @@ function generateMockSpans(traceId: string): Span[] {
       status: "success",
       attributes: {
         tool_name: "web_search",
-        input: { query: "AI trends 2024" },
-        output: "Found 15 relevant articles...",
+        input: { query: "AI trends 2024 enterprise adoption statistics" },
+        output: "Found 15 relevant articles:\n1. 'Enterprise AI Adoption Reaches 72% in 2024' - Forbes\n2. 'Generative AI Market to Hit $1.3T by 2032' - McKinsey\n3. 'Top 10 AI Trends Reshaping Business' - Gartner\n4. 'OpenAI and Google Lead AI Race' - TechCrunch\n5. 'AI Infrastructure Spending Surges 40%' - IDC",
       },
       children: [],
     },
@@ -115,10 +138,18 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 4700,
       status: "success",
       attributes: {
-        model: "gpt-4",
-        tokens_input: 2450,
-        tokens_output: 890,
+        model: "gpt-4-turbo",
+        temperature: 0.7,
+        max_tokens: 2000,
+        input_tokens: 2450,
+        output_tokens: 890,
+        total_tokens: 3340,
         cost: 0.12,
+        messages: [
+          { role: "system", content: "You are an expert AI researcher with 10 years of experience tracking industry trends and technological advancements. Your goal is to find comprehensive information about AI trends and compile research findings." },
+          { role: "user", content: "Based on the search results, analyze the key AI trends for 2024. Focus on:\n1. Enterprise adoption rates\n2. Market size projections\n3. Key technology areas\n4. Major players\n\nSearch Results:\n- Enterprise AI Adoption Reaches 72% in 2024 (Forbes)\n- Generative AI Market to Hit $1.3T by 2032 (McKinsey)\n- Top 10 AI Trends Reshaping Business (Gartner)..." },
+        ],
+        response: "Based on my analysis of the search results, here are the key AI trends for 2024:\n\n## 1. Enterprise Adoption\nEnterprise AI adoption has reached an unprecedented 72% in 2024, up from 55% in 2023. This represents a significant acceleration driven by:\n- Improved ROI visibility\n- Better tooling and platforms\n- Increased executive buy-in\n\n## 2. Market Projections\nThe generative AI market is projected to reach $1.3 trillion by 2032, with a CAGR of 42%. Key growth areas include:\n- Content generation\n- Code assistance\n- Customer service automation\n\n## 3. Technology Focus Areas\n- Multimodal AI (text, image, video, audio)\n- Small language models for edge deployment\n- AI agents and autonomous systems\n- Retrieval-augmented generation (RAG)\n\n## 4. Major Players\nOpenAI, Google, Anthropic, and Microsoft continue to lead...",
       },
       children: [],
     },
@@ -134,7 +165,8 @@ function generateMockSpans(traceId: string): Span[] {
       status: "success",
       attributes: {
         tool_name: "web_search",
-        input: { query: "generative AI applications" },
+        input: { query: "generative AI applications enterprise use cases 2024" },
+        output: "Found 12 relevant articles:\n1. 'How Enterprises Use GenAI in Production' - Harvard Business Review\n2. 'Top GenAI Use Cases by Industry' - Deloitte\n3. 'ROI of Generative AI Projects' - Accenture",
       },
       children: [],
     },
@@ -150,8 +182,8 @@ function generateMockSpans(traceId: string): Span[] {
       status: "error",
       attributes: {
         tool_name: "read_file",
-        input: { path: "/data/report.txt" },
-        error: "File not found",
+        input: { path: "/data/previous_report.txt" },
+        error: "FileNotFoundError: [Errno 2] No such file or directory: '/data/previous_report.txt'",
       },
       children: [],
     },
@@ -166,10 +198,18 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 5000,
       status: "success",
       attributes: {
-        model: "gpt-4",
-        tokens_input: 3200,
-        tokens_output: 1250,
+        model: "gpt-4-turbo",
+        temperature: 0.7,
+        max_tokens: 3000,
+        input_tokens: 3200,
+        output_tokens: 1250,
+        total_tokens: 4450,
         cost: 0.18,
+        messages: [
+          { role: "system", content: "You are an expert AI researcher..." },
+          { role: "user", content: "Compile the final research summary incorporating all findings about AI trends 2024, enterprise use cases, and market projections." },
+        ],
+        response: "# AI Trends 2024: Comprehensive Research Summary\n\n## Executive Summary\nThe AI landscape in 2024 is characterized by rapid enterprise adoption, significant market growth, and technological maturation...\n\n## Key Findings\n\n### 1. Enterprise Adoption at Scale\n- 72% of enterprises now use AI in production\n- Average of 4.2 AI projects per organization\n- 89% report positive ROI within 18 months\n\n### 2. Generative AI Dominance\n- $67B market in 2024, growing to $1.3T by 2032\n- Primary use cases: content creation (34%), code assistance (28%), customer service (22%)\n- 45% of enterprises have deployed GenAI chatbots\n\n### 3. Technology Trends\n- Multimodal AI becoming standard\n- RAG architecture for enterprise knowledge bases\n- AI agents for autonomous task completion\n- Edge AI for latency-sensitive applications...",
       },
       children: [],
     },
@@ -185,8 +225,11 @@ function generateMockSpans(traceId: string): Span[] {
       status: "success",
       attributes: {
         role: "Writer",
-        goal: "Write a comprehensive report",
+        goal: "Write a comprehensive, well-structured report based on research findings",
+        backstory: "You are a skilled technical writer with expertise in explaining complex AI concepts to business audiences.",
         model: "gpt-4",
+        tools: ["write_file", "read_file"],
+        allow_delegation: false,
       },
       children: [],
     },
@@ -201,7 +244,10 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 15900,
       status: "success",
       attributes: {
-        description: "Write a detailed report based on research findings",
+        description: "Write a detailed, professional report based on the research findings. Include executive summary, key findings, market analysis, and recommendations.",
+        expected_output: "A polished markdown report suitable for executive presentation",
+        assigned_agent: "Writer",
+        context_tasks: ["Research AI Trends"],
       },
       children: [],
     },
@@ -216,10 +262,18 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 9000,
       status: "success",
       attributes: {
-        model: "gpt-4",
-        tokens_input: 4500,
-        tokens_output: 2800,
+        model: "gpt-4-turbo",
+        temperature: 0.5,
+        max_tokens: 4000,
+        input_tokens: 4500,
+        output_tokens: 2800,
+        total_tokens: 7300,
         cost: 0.32,
+        messages: [
+          { role: "system", content: "You are a skilled technical writer with expertise in explaining complex AI concepts to business audiences." },
+          { role: "user", content: "Based on the following research findings, write a comprehensive executive report on AI Trends 2024:\n\n[Research Summary]\n- Enterprise adoption at 72%\n- Market size $67B growing to $1.3T\n- Key trends: multimodal AI, RAG, AI agents\n..." },
+        ],
+        response: "# AI Trends 2024: Executive Report\n\n## Executive Summary\n\nThe artificial intelligence landscape in 2024 represents a pivotal moment in technological history. With enterprise adoption reaching 72% and the generative AI market valued at $67 billion, organizations across industries are fundamentally transforming their operations through AI integration.\n\nThis report provides a comprehensive analysis of current AI trends, market dynamics, and strategic recommendations for business leaders navigating this rapidly evolving landscape.\n\n## Key Findings\n\n### Market Overview\n\nThe global AI market has demonstrated unprecedented growth:\n\n| Metric | 2024 Value | 2032 Projection | CAGR |\n|--------|------------|-----------------|------|\n| Total AI Market | $184B | $1.8T | 33% |\n| Generative AI | $67B | $1.3T | 42% |\n| Enterprise AI | $45B | $380B | 35% |\n\n### Adoption Patterns\n\n**Enterprise Integration**\nOrganizations are moving beyond pilot projects to production deployments:\n- 72% have at least one AI system in production\n- Average of 4.2 active AI projects per enterprise\n- 89% report positive ROI within 18 months\n\n**Industry Leaders**\n- Financial Services: 84% adoption\n- Healthcare: 76% adoption\n- Technology: 91% adoption\n- Manufacturing: 68% adoption\n\n## Technology Landscape\n\n### Dominant Trends\n\n1. **Multimodal AI**\n   The convergence of text, image, video, and audio processing...\n\n2. **Retrieval-Augmented Generation (RAG)**\n   Enterprises are combining LLMs with proprietary knowledge bases...\n\n3. **AI Agents**\n   Autonomous systems capable of multi-step task completion...\n\n## Recommendations\n\n1. Prioritize AI governance and ethics frameworks\n2. Invest in data infrastructure and quality\n3. Develop AI literacy across the organization\n4. Start with high-ROI use cases\n5. Build vs. buy decision framework\n\n## Conclusion\n\nThe AI revolution is no longer coming—it is here...",
       },
       children: [],
     },
@@ -235,7 +289,8 @@ function generateMockSpans(traceId: string): Span[] {
       status: "success",
       attributes: {
         tool_name: "write_file",
-        input: { path: "/output/report.md" },
+        input: { path: "/output/ai_trends_2024_report.md", content: "[report content]" },
+        output: "Successfully wrote 4,523 bytes to /output/ai_trends_2024_report.md",
       },
       children: [],
     },
@@ -250,10 +305,18 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 4500,
       status: "success",
       attributes: {
-        model: "gpt-4",
-        tokens_input: 1800,
-        tokens_output: 650,
+        model: "gpt-4-turbo",
+        temperature: 0.3,
+        max_tokens: 1000,
+        input_tokens: 1800,
+        output_tokens: 650,
+        total_tokens: 2450,
         cost: 0.09,
+        messages: [
+          { role: "system", content: "You are a skilled technical writer..." },
+          { role: "user", content: "Generate a brief summary of the report that was just written for the task completion." },
+        ],
+        response: "The AI Trends 2024 Executive Report has been successfully completed. The report covers:\n\n- Market overview with $184B total AI market growing to $1.8T by 2032\n- Enterprise adoption statistics showing 72% adoption rate\n- Technology trends including multimodal AI, RAG, and AI agents\n- Industry-specific adoption patterns\n- Strategic recommendations for business leaders\n\nThe full report has been saved to /output/ai_trends_2024_report.md",
       },
       children: [],
     },
@@ -269,8 +332,11 @@ function generateMockSpans(traceId: string): Span[] {
       status: "success",
       attributes: {
         role: "Editor",
-        goal: "Review and polish the report",
+        goal: "Review and polish the report for clarity, accuracy, and professional presentation",
+        backstory: "You are a senior editor with 15 years of experience in business and technology publications.",
         model: "gpt-4",
+        tools: ["read_file", "write_file"],
+        allow_delegation: false,
       },
       children: [],
     },
@@ -285,7 +351,10 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 5400,
       status: "success",
       attributes: {
-        description: "Review and edit the report for clarity",
+        description: "Review and edit the report for clarity, grammar, consistency, and professional tone. Ensure all statistics are properly cited.",
+        expected_output: "A polished, publication-ready report",
+        assigned_agent: "Editor",
+        context_tasks: ["Write Report"],
       },
       children: [],
     },
@@ -300,10 +369,18 @@ function generateMockSpans(traceId: string): Span[] {
       duration: 4500,
       status: "success",
       attributes: {
-        model: "gpt-4",
-        tokens_input: 3500,
-        tokens_output: 450,
+        model: "gpt-4-turbo",
+        temperature: 0.2,
+        max_tokens: 2000,
+        input_tokens: 3500,
+        output_tokens: 450,
+        total_tokens: 3950,
         cost: 0.08,
+        messages: [
+          { role: "system", content: "You are a senior editor with 15 years of experience in business and technology publications. Your goal is to review and polish the report for clarity, accuracy, and professional presentation." },
+          { role: "user", content: "Review the following AI Trends 2024 report and provide editing feedback:\n\n[Full report content...]\n\nFocus on:\n1. Grammar and clarity\n2. Consistency of tone\n3. Statistical accuracy\n4. Professional formatting" },
+        ],
+        response: "## Editorial Review Complete\n\n### Changes Made:\n1. **Grammar & Clarity**: Fixed 3 minor grammatical issues, improved sentence flow in executive summary\n2. **Tone**: Adjusted 2 sections for more consistent professional tone\n3. **Statistics**: All statistics verified and properly formatted\n4. **Formatting**: Enhanced table alignment, consistent heading hierarchy\n\n### Quality Assessment:\n- Overall quality: Excellent\n- Readability score: Professional/Executive level\n- Recommended for publication: Yes\n\nThe report is now publication-ready.",
       },
       children: [],
     },
@@ -333,6 +410,121 @@ function buildSpanTree(spans: Span[]): Span[] {
   });
 
   return roots;
+}
+
+// Get tooltip preview content based on span type
+function getTooltipPreview(span: Span): React.ReactNode {
+  const attrs = span.attributes;
+
+  switch (span.type) {
+    case "llm": {
+      const messages = attrs.messages as Message[] | undefined;
+      const response = attrs.response as string | undefined;
+      const inputTokens = attrs.input_tokens as number | undefined;
+      const outputTokens = attrs.output_tokens as number | undefined;
+      const cost = attrs.cost as number | undefined;
+      const model = attrs.model as string | undefined;
+
+      return (
+        <div className="space-y-2 max-w-md">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {model && <Badge variant="outline" className="text-[10px]">{model}</Badge>}
+            {inputTokens && <span><Hash className="h-3 w-3 inline" /> {inputTokens} in</span>}
+            {outputTokens && <span><Hash className="h-3 w-3 inline" /> {outputTokens} out</span>}
+            {cost && <span><DollarSign className="h-3 w-3 inline" /> ${cost.toFixed(3)}</span>}
+          </div>
+          {messages && messages.length > 0 && (
+            <div className="border-l-2 border-blue-500 pl-2">
+              <div className="text-[10px] text-muted-foreground uppercase">Prompt</div>
+              <div className="text-xs line-clamp-3">
+                {messages[messages.length - 1]?.content?.slice(0, 200)}...
+              </div>
+            </div>
+          )}
+          {response && (
+            <div className="border-l-2 border-green-500 pl-2">
+              <div className="text-[10px] text-muted-foreground uppercase">Response</div>
+              <div className="text-xs line-clamp-3">{response.slice(0, 200)}...</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "tool": {
+      const input = attrs.input as Record<string, unknown> | undefined;
+      const output = attrs.output as string | undefined;
+      const error = attrs.error as string | undefined;
+
+      return (
+        <div className="space-y-2 max-w-md">
+          {input && (
+            <div className="border-l-2 border-orange-500 pl-2">
+              <div className="text-[10px] text-muted-foreground uppercase">Input</div>
+              <div className="text-xs font-mono line-clamp-2">
+                {JSON.stringify(input).slice(0, 150)}
+              </div>
+            </div>
+          )}
+          {output && (
+            <div className="border-l-2 border-green-500 pl-2">
+              <div className="text-[10px] text-muted-foreground uppercase">Output</div>
+              <div className="text-xs line-clamp-2">{output.slice(0, 150)}</div>
+            </div>
+          )}
+          {error && (
+            <div className="border-l-2 border-red-500 pl-2">
+              <div className="text-[10px] text-muted-foreground uppercase">Error</div>
+              <div className="text-xs text-red-500 line-clamp-2">{error}</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "agent": {
+      const role = attrs.role as string | undefined;
+      const goal = attrs.goal as string | undefined;
+      const tools = attrs.tools as string[] | undefined;
+
+      return (
+        <div className="space-y-2 max-w-md">
+          {role && <div className="font-medium">{role}</div>}
+          {goal && (
+            <div className="text-xs text-muted-foreground line-clamp-2">{goal}</div>
+          )}
+          {tools && tools.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {tools.slice(0, 5).map((t) => (
+                <Badge key={t} variant="outline" className="text-[10px]">{t}</Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "task": {
+      const description = attrs.description as string | undefined;
+      const expectedOutput = attrs.expected_output as string | undefined;
+
+      return (
+        <div className="space-y-2 max-w-md">
+          {description && (
+            <div className="text-xs line-clamp-3">{description}</div>
+          )}
+          {expectedOutput && (
+            <div className="text-[10px] text-muted-foreground">
+              Expected: {expectedOutput.slice(0, 100)}
+            </div>
+          )}
+        </div>
+      );
+    }
+    default:
+      return (
+        <div className="text-xs text-muted-foreground">
+          Click to view details
+        </div>
+      );
+  }
 }
 
 // Span bar component
@@ -376,72 +568,509 @@ function SpanBar({
 
   const hasChildren = span.children.length > 0;
 
-  return (
-    <div
-      className={`group border-b border-border/50 hover:bg-muted/50 cursor-pointer ${
-        selected ? "bg-muted" : ""
-      }`}
-      onClick={onSelect}
-    >
-      <div className="flex items-center h-10">
-        {/* Left side: Name and hierarchy */}
-        <div
-          className="flex items-center gap-1 min-w-[300px] max-w-[300px] px-2"
-          style={{ paddingLeft: `${depth * 20 + 8}px` }}
-        >
-          {hasChildren && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggle();
-              }}
-              className="p-0.5 hover:bg-muted rounded"
-            >
-              {expanded ? (
-                <ChevronDown className="h-3 w-3" />
-              ) : (
-                <ChevronRight className="h-3 w-3" />
-              )}
-            </button>
-          )}
-          {!hasChildren && <div className="w-4" />}
-          <span
-            className={`p-1 rounded ${typeColors[span.type]} text-white`}
-          >
-            {typeIcons[span.type]}
-          </span>
-          <span className="text-sm truncate">{span.name}</span>
-          {span.status === "error" && (
-            <AlertTriangle className="h-3 w-3 text-red-500 ml-1" />
-          )}
-        </div>
+  // Quick stats for the span
+  const quickStats = [];
+  if (span.type === "llm") {
+    const tokens = (span.attributes.input_tokens as number || 0) + (span.attributes.output_tokens as number || 0);
+    if (tokens) quickStats.push(`${tokens} tokens`);
+    if (span.attributes.cost) quickStats.push(`$${(span.attributes.cost as number).toFixed(2)}`);
+  }
 
-        {/* Right side: Timeline bar */}
-        <div className="flex-1 h-full relative px-2">
-          <div className="absolute inset-y-2 left-0 right-0">
-            {/* Timeline background */}
-            <div className="h-full w-full bg-muted/30 rounded relative">
-              {/* Span bar */}
-              <div
-                className={`absolute h-full rounded ${typeColors[span.type]} ${
-                  span.status === "error" ? "opacity-70" : "opacity-90"
-                } transition-all hover:opacity-100`}
-                style={{
-                  left: `${offsetPercent}%`,
-                  width: `${widthPercent}%`,
-                }}
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className={`group border-b border-border/50 hover:bg-muted/50 cursor-pointer ${
+            selected ? "bg-muted" : ""
+          }`}
+          onClick={onSelect}
+        >
+          <div className="flex items-center h-10">
+            {/* Left side: Name and hierarchy */}
+            <div
+              className="flex items-center gap-1 min-w-[300px] max-w-[300px] px-2"
+              style={{ paddingLeft: `${depth * 20 + 8}px` }}
+            >
+              {hasChildren && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggle();
+                  }}
+                  className="p-0.5 hover:bg-muted rounded"
+                >
+                  {expanded ? (
+                    <ChevronDown className="h-3 w-3" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3" />
+                  )}
+                </button>
+              )}
+              {!hasChildren && <div className="w-4" />}
+              <span
+                className={`p-1 rounded ${typeColors[span.type]} text-white`}
               >
-                {/* Duration label */}
-                <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-white font-medium whitespace-nowrap">
-                  {span.duration >= 1000
-                    ? `${(span.duration / 1000).toFixed(1)}s`
-                    : `${span.duration}ms`}
+                {typeIcons[span.type]}
+              </span>
+              <span className="text-sm truncate">{span.name}</span>
+              {span.status === "error" && (
+                <AlertTriangle className="h-3 w-3 text-red-500 ml-1" />
+              )}
+              {quickStats.length > 0 && (
+                <span className="text-[10px] text-muted-foreground ml-2">
+                  {quickStats.join(" • ")}
                 </span>
+              )}
+            </div>
+
+            {/* Right side: Timeline bar */}
+            <div className="flex-1 h-full relative px-2">
+              <div className="absolute inset-y-2 left-0 right-0">
+                {/* Timeline background */}
+                <div className="h-full w-full bg-muted/30 rounded relative">
+                  {/* Span bar */}
+                  <div
+                    className={`absolute h-full rounded ${typeColors[span.type]} ${
+                      span.status === "error" ? "opacity-70" : "opacity-90"
+                    } transition-all hover:opacity-100`}
+                    style={{
+                      left: `${offsetPercent}%`,
+                      width: `${widthPercent}%`,
+                    }}
+                  >
+                    {/* Duration label */}
+                    <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-white font-medium whitespace-nowrap">
+                      {span.duration >= 1000
+                        ? `${(span.duration / 1000).toFixed(1)}s`
+                        : `${span.duration}ms`}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="p-3">
+        <div className="text-sm font-medium mb-2">{span.name}</div>
+        {getTooltipPreview(span)}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+// Copy button component
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 px-2">
+      {copied ? (
+        <Check className="h-3 w-3 text-green-500" />
+      ) : (
+        <Copy className="h-3 w-3" />
+      )}
+    </Button>
+  );
+}
+
+// Message bubble component for LLM conversations
+function MessageBubble({ message }: { message: Message }) {
+  const isUser = message.role === "user";
+  const isSystem = message.role === "system";
+
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[90%] rounded-lg p-3 ${
+          isSystem
+            ? "bg-muted border text-sm"
+            : isUser
+            ? "bg-blue-500 text-white"
+            : "bg-green-500 text-white"
+        }`}
+      >
+        <div className="text-[10px] uppercase opacity-70 mb-1">
+          {message.role}
+        </div>
+        <div className="text-sm whitespace-pre-wrap break-words">
+          {message.content}
+          {message.truncated && (
+            <span className="text-xs opacity-70"> [truncated]</span>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+// Rich detail panel for span
+function SpanDetailPanel({ span }: { span: Span }) {
+  const [activeTab, setActiveTab] = useState<"overview" | "messages" | "raw">("overview");
+  const attrs = span.attributes;
+
+  const typeColors: Record<string, string> = {
+    crew: "bg-purple-500",
+    agent: "bg-blue-500",
+    task: "bg-green-500",
+    tool: "bg-orange-500",
+    llm: "bg-pink-500",
+  };
+
+  // Render LLM-specific details
+  const renderLLMDetails = () => {
+    const messages = attrs.messages as Message[] | undefined;
+    const response = attrs.response as string | undefined;
+    const model = attrs.model as string | undefined;
+    const inputTokens = attrs.input_tokens as number | undefined;
+    const outputTokens = attrs.output_tokens as number | undefined;
+    const totalTokens = attrs.total_tokens as number | undefined;
+    const cost = attrs.cost as number | undefined;
+    const temperature = attrs.temperature as number | undefined;
+    const maxTokens = attrs.max_tokens as number | undefined;
+
+    return (
+      <div className="space-y-4">
+        {/* Model Info */}
+        <div className="flex flex-wrap gap-2">
+          {model && (
+            <Badge variant="outline" className="flex items-center gap-1">
+              <Zap className="h-3 w-3" /> {model}
+            </Badge>
+          )}
+          {temperature !== undefined && (
+            <Badge variant="outline">temp: {temperature}</Badge>
+          )}
+          {maxTokens && (
+            <Badge variant="outline">max: {maxTokens}</Badge>
+          )}
+        </div>
+
+        {/* Token Stats */}
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="bg-muted rounded p-2">
+            <div className="text-muted-foreground text-xs">Input Tokens</div>
+            <div className="font-mono font-medium">{inputTokens?.toLocaleString() || "—"}</div>
+          </div>
+          <div className="bg-muted rounded p-2">
+            <div className="text-muted-foreground text-xs">Output Tokens</div>
+            <div className="font-mono font-medium">{outputTokens?.toLocaleString() || "—"}</div>
+          </div>
+          <div className="bg-muted rounded p-2">
+            <div className="text-muted-foreground text-xs">Total Tokens</div>
+            <div className="font-mono font-medium">{totalTokens?.toLocaleString() || "—"}</div>
+          </div>
+          <div className="bg-muted rounded p-2">
+            <div className="text-muted-foreground text-xs">Cost</div>
+            <div className="font-mono font-medium text-green-600">
+              {cost ? `$${cost.toFixed(4)}` : "—"}
+            </div>
+          </div>
+        </div>
+
+        {/* Tab buttons for LLM */}
+        <div className="flex gap-1 border-b">
+          <button
+            onClick={() => setActiveTab("messages")}
+            className={`px-3 py-1.5 text-sm ${
+              activeTab === "messages"
+                ? "border-b-2 border-primary font-medium"
+                : "text-muted-foreground"
+            }`}
+          >
+            Messages
+          </button>
+          <button
+            onClick={() => setActiveTab("raw")}
+            className={`px-3 py-1.5 text-sm ${
+              activeTab === "raw"
+                ? "border-b-2 border-primary font-medium"
+                : "text-muted-foreground"
+            }`}
+          >
+            Raw JSON
+          </button>
+        </div>
+
+        {/* Messages Tab */}
+        {activeTab === "messages" && (
+          <div className="space-y-3">
+            {messages && messages.length > 0 ? (
+              <>
+                <div className="text-xs text-muted-foreground font-medium uppercase">
+                  Prompt Messages
+                </div>
+                <div className="space-y-2">
+                  {messages.map((msg, i) => (
+                    <MessageBubble key={i} message={msg} />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">No messages captured</div>
+            )}
+
+            {response && (
+              <>
+                <div className="text-xs text-muted-foreground font-medium uppercase mt-4">
+                  Response
+                </div>
+                <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg p-3">
+                  <div className="flex justify-between items-start mb-2">
+                    <Badge variant="outline" className="bg-green-100 dark:bg-green-900">
+                      assistant
+                    </Badge>
+                    <CopyButton text={response} />
+                  </div>
+                  <div className="text-sm whitespace-pre-wrap break-words">
+                    {response}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Raw JSON Tab */}
+        {activeTab === "raw" && (
+          <div className="relative">
+            <div className="absolute top-2 right-2">
+              <CopyButton text={JSON.stringify(attrs, null, 2)} />
+            </div>
+            <pre className="bg-muted rounded p-3 text-xs font-mono overflow-x-auto">
+              {JSON.stringify(attrs, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Render Tool-specific details
+  const renderToolDetails = () => {
+    const toolName = attrs.tool_name as string | undefined;
+    const input = attrs.input as Record<string, unknown> | undefined;
+    const output = attrs.output as string | undefined;
+    const error = attrs.error as string | undefined;
+
+    return (
+      <div className="space-y-4">
+        {toolName && (
+          <Badge variant="outline" className="flex items-center gap-1 w-fit">
+            <Wrench className="h-3 w-3" /> {toolName}
+          </Badge>
+        )}
+
+        {input && (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <div className="text-xs text-muted-foreground font-medium uppercase">Input</div>
+              <CopyButton text={JSON.stringify(input, null, 2)} />
+            </div>
+            <pre className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded p-3 text-xs font-mono overflow-x-auto">
+              {JSON.stringify(input, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {output && (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <div className="text-xs text-muted-foreground font-medium uppercase">Output</div>
+              <CopyButton text={output} />
+            </div>
+            <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded p-3 text-sm whitespace-pre-wrap">
+              {output}
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-2">Error</div>
+            <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded p-3 text-sm text-red-600 dark:text-red-400">
+              {error}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Render Agent-specific details
+  const renderAgentDetails = () => {
+    const role = attrs.role as string | undefined;
+    const goal = attrs.goal as string | undefined;
+    const backstory = attrs.backstory as string | undefined;
+    const tools = attrs.tools as string[] | undefined;
+    const model = attrs.model as string | undefined;
+    const allowDelegation = attrs.allow_delegation as boolean | undefined;
+
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {model && (
+            <Badge variant="outline" className="flex items-center gap-1">
+              <Zap className="h-3 w-3" /> {model}
+            </Badge>
+          )}
+          {allowDelegation !== undefined && (
+            <Badge variant={allowDelegation ? "default" : "secondary"}>
+              {allowDelegation ? "Can Delegate" : "No Delegation"}
+            </Badge>
+          )}
+        </div>
+
+        {goal && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-1">Goal</div>
+            <div className="text-sm bg-muted rounded p-2">{goal}</div>
+          </div>
+        )}
+
+        {backstory && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-1">Backstory</div>
+            <div className="text-sm bg-muted rounded p-2 text-muted-foreground">{backstory}</div>
+          </div>
+        )}
+
+        {tools && tools.length > 0 && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-2">Available Tools</div>
+            <div className="flex flex-wrap gap-1">
+              {tools.map((t) => (
+                <Badge key={t} variant="outline" className="text-xs">
+                  <Wrench className="h-3 w-3 mr-1" /> {t}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Render Task-specific details
+  const renderTaskDetails = () => {
+    const description = attrs.description as string | undefined;
+    const expectedOutput = attrs.expected_output as string | undefined;
+    const assignedAgent = attrs.assigned_agent as string | undefined;
+    const contextTasks = attrs.context_tasks as string[] | undefined;
+
+    return (
+      <div className="space-y-4">
+        {assignedAgent && (
+          <Badge variant="outline" className="flex items-center gap-1 w-fit">
+            <Bot className="h-3 w-3" /> {assignedAgent}
+          </Badge>
+        )}
+
+        {description && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-1">Description</div>
+            <div className="text-sm bg-muted rounded p-2">{description}</div>
+          </div>
+        )}
+
+        {expectedOutput && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-1">Expected Output</div>
+            <div className="text-sm bg-muted rounded p-2 text-muted-foreground">{expectedOutput}</div>
+          </div>
+        )}
+
+        {contextTasks && contextTasks.length > 0 && (
+          <div>
+            <div className="text-xs text-muted-foreground font-medium uppercase mb-2">Context From</div>
+            <div className="space-y-1">
+              {contextTasks.map((t, i) => (
+                <div key={i} className="text-xs bg-muted rounded px-2 py-1">
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Render type-specific content
+  const renderTypeContent = () => {
+    switch (span.type) {
+      case "llm":
+        return renderLLMDetails();
+      case "tool":
+        return renderToolDetails();
+      case "agent":
+        return renderAgentDetails();
+      case "task":
+        return renderTaskDetails();
+      default:
+        return (
+          <div className="relative">
+            <div className="absolute top-2 right-2">
+              <CopyButton text={JSON.stringify(attrs, null, 2)} />
+            </div>
+            <pre className="bg-muted rounded p-3 text-xs font-mono overflow-x-auto">
+              {JSON.stringify(attrs, null, 2)}
+            </pre>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div>
+        <h3 className="font-medium flex items-center gap-2">
+          <span className={`p-1 rounded ${typeColors[span.type]} text-white`}>
+            {span.type === "llm" ? <MessageSquare className="h-4 w-4" /> :
+             span.type === "tool" ? <Wrench className="h-4 w-4" /> :
+             span.type === "agent" ? <Bot className="h-4 w-4" /> :
+             span.type === "task" ? <CheckCircle className="h-4 w-4" /> :
+             <Play className="h-4 w-4" />}
+          </span>
+          {span.name}
+        </h3>
+        <div className="flex gap-2 mt-2">
+          <Badge
+            variant={span.status === "error" ? "destructive" : "default"}
+          >
+            {span.status}
+          </Badge>
+          <Badge variant="outline">{span.type}</Badge>
+        </div>
+      </div>
+
+      {/* Timing Info */}
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        <div className="bg-muted rounded p-2">
+          <div className="text-muted-foreground text-xs">Duration</div>
+          <div className="font-mono font-medium">
+            {span.duration >= 1000
+              ? `${(span.duration / 1000).toFixed(2)}s`
+              : `${span.duration}ms`}
+          </div>
+        </div>
+        <div className="bg-muted rounded p-2">
+          <div className="text-muted-foreground text-xs">Start</div>
+          <div className="font-mono text-xs">
+            {new Date(span.startTime).toLocaleTimeString()}
+          </div>
+        </div>
+      </div>
+
+      {/* Type-specific content */}
+      {renderTypeContent()}
     </div>
   );
 }
@@ -721,76 +1350,30 @@ export default function SpanViewPage() {
 
             {/* Spans */}
             <div className="max-h-[500px] overflow-y-auto">
-              <SpanTree
-                spans={spanTree}
-                totalDuration={totalDuration}
-                minTime={minTime}
-                depth={0}
-                expandedSpans={expandedSpans}
-                toggleSpan={toggleSpan}
-                selectedSpan={selectedSpan}
-                setSelectedSpan={setSelectedSpan}
-              />
+              <TooltipProvider delayDuration={300}>
+                <SpanTree
+                  spans={spanTree}
+                  totalDuration={totalDuration}
+                  minTime={minTime}
+                  depth={0}
+                  expandedSpans={expandedSpans}
+                  toggleSpan={toggleSpan}
+                  selectedSpan={selectedSpan}
+                  setSelectedSpan={setSelectedSpan}
+                />
+              </TooltipProvider>
             </div>
           </CardContent>
         </Card>
 
         {/* Span Details */}
-        <Card>
+        <Card className="overflow-hidden">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Span Details</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="max-h-[600px] overflow-y-auto">
             {selectedSpanData ? (
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-medium">{selectedSpanData.name}</h3>
-                  <div className="flex gap-2 mt-2">
-                    <Badge
-                      variant={
-                        selectedSpanData.status === "error"
-                          ? "destructive"
-                          : "default"
-                      }
-                    >
-                      {selectedSpanData.status}
-                    </Badge>
-                    <Badge variant="outline">{selectedSpanData.type}</Badge>
-                  </div>
-                </div>
-
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Duration</span>
-                    <span className="font-mono">
-                      {selectedSpanData.duration >= 1000
-                        ? `${(selectedSpanData.duration / 1000).toFixed(2)}s`
-                        : `${selectedSpanData.duration}ms`}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Start Time</span>
-                    <span className="font-mono text-xs">
-                      {new Date(selectedSpanData.startTime).toISOString()}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">End Time</span>
-                    <span className="font-mono text-xs">
-                      {new Date(selectedSpanData.endTime).toISOString()}
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="font-medium mb-2">Attributes</h4>
-                  <div className="bg-muted rounded p-3 text-xs font-mono overflow-x-auto">
-                    <pre>
-                      {JSON.stringify(selectedSpanData.attributes, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              </div>
+              <SpanDetailPanel span={selectedSpanData} />
             ) : (
               <p className="text-muted-foreground text-sm">
                 Click on a span to view details

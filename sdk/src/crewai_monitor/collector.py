@@ -225,9 +225,36 @@ class TraceCollector(BaseEventListener if CREWAI_AVAILABLE else object):
 
     def _handle_agent_started(self, event: Any) -> None:
         agent_role = self._get_agent_role(event)
+        agent = getattr(event, "agent", None)
+
+        payload: dict[str, Any] = {}
+        if agent:
+            # Capture agent configuration
+            if hasattr(agent, "goal"):
+                payload["goal"] = str(agent.goal)[:500]
+            if hasattr(agent, "backstory"):
+                payload["backstory"] = str(agent.backstory)[:500]
+            if hasattr(agent, "tools"):
+                try:
+                    tool_names = [t.name if hasattr(t, "name") else str(t) for t in agent.tools]
+                    payload["tools"] = tool_names[:20]  # Limit to 20 tools
+                except Exception:
+                    pass
+            if hasattr(agent, "llm"):
+                llm = agent.llm
+                if hasattr(llm, "model_name"):
+                    payload["model"] = str(llm.model_name)
+                elif hasattr(llm, "model"):
+                    payload["model"] = str(llm.model)
+            if hasattr(agent, "allow_delegation"):
+                payload["allow_delegation"] = bool(agent.allow_delegation)
+            if hasattr(agent, "verbose"):
+                payload["verbose"] = bool(agent.verbose)
+
         self._add_event(
             event_type="agent_started",
             agent_role=agent_role,
+            payload=payload if payload else None,
         )
 
     def _handle_agent_completed(self, event: Any) -> None:
@@ -250,12 +277,31 @@ class TraceCollector(BaseEventListener if CREWAI_AVAILABLE else object):
         )
 
     def _handle_task_started(self, event: Any) -> None:
-        task_desc = getattr(event, "task", None)
-        if task_desc and hasattr(task_desc, "description"):
-            task_desc = task_desc.description[:200]
+        task = getattr(event, "task", None)
+        task_desc = None
+        payload: dict[str, Any] = {}
+
+        if task:
+            if hasattr(task, "description"):
+                task_desc = str(task.description)[:500]
+            if hasattr(task, "expected_output"):
+                payload["expected_output"] = str(task.expected_output)[:500]
+            if hasattr(task, "agent") and task.agent:
+                if hasattr(task.agent, "role"):
+                    payload["assigned_agent"] = str(task.agent.role)
+            if hasattr(task, "context") and task.context:
+                try:
+                    context_tasks = [t.description[:100] if hasattr(t, "description") else str(t)[:100] for t in task.context]
+                    payload["context_tasks"] = context_tasks[:5]  # Limit to 5
+                except Exception:
+                    pass
+            if hasattr(task, "async_execution"):
+                payload["async_execution"] = bool(task.async_execution)
+
         self._add_event(
             event_type="task_started",
-            task_description=str(task_desc) if task_desc else None,
+            task_description=task_desc,
+            payload=payload if payload else None,
         )
 
     def _handle_task_completed(self, event: Any) -> None:
@@ -344,9 +390,31 @@ class TraceCollector(BaseEventListener if CREWAI_AVAILABLE else object):
             self._llm_start_times[key] = time.time()
             self._agent_metrics[agent_role].llm_calls += 1
 
+        # Extract prompt/messages from the event
+        messages = getattr(event, "messages", None)
+        prompt = getattr(event, "prompt", None)
+        model = getattr(event, "model", None) or getattr(event, "model_name", None)
+
+        # Build payload with available LLM request data
+        payload: dict[str, Any] = {}
+        if model:
+            payload["model"] = str(model)
+        if messages:
+            # Truncate messages for storage but keep structure
+            payload["messages"] = self._truncate_messages(messages)
+        if prompt:
+            payload["prompt"] = str(prompt)[:2000]
+
+        # Capture additional LLM parameters if available
+        for attr in ["temperature", "max_tokens", "top_p", "stop"]:
+            val = getattr(event, attr, None)
+            if val is not None:
+                payload[attr] = val
+
         self._add_event(
             event_type="llm_started",
             agent_role=agent_role,
+            payload=payload if payload else None,
         )
 
     def _handle_llm_completed(self, event: Any) -> None:
@@ -360,13 +428,58 @@ class TraceCollector(BaseEventListener if CREWAI_AVAILABLE else object):
                     duration_ms = (time.time() - start_time) * 1000
                     break
 
+        # Extract response data
+        response = getattr(event, "response", None)
+        completion = getattr(event, "completion", None)
+        output = getattr(event, "output", None)
+        content = response or completion or output
+
+        # Extract token usage
+        tokens_used = getattr(event, "tokens_used", None)
+        usage = getattr(event, "usage", None)
+
+        payload: dict[str, Any] = {}
+
+        # Token counts
+        if tokens_used:
+            payload["tokens_used"] = tokens_used
+        if usage:
+            if hasattr(usage, "prompt_tokens"):
+                payload["input_tokens"] = usage.prompt_tokens
+            if hasattr(usage, "completion_tokens"):
+                payload["output_tokens"] = usage.completion_tokens
+            if hasattr(usage, "total_tokens"):
+                payload["total_tokens"] = usage.total_tokens
+
+        # Try to extract tokens from various attribute names
+        for input_attr in ["prompt_tokens", "input_tokens"]:
+            val = getattr(event, input_attr, None)
+            if val and "input_tokens" not in payload:
+                payload["input_tokens"] = val
+        for output_attr in ["completion_tokens", "output_tokens"]:
+            val = getattr(event, output_attr, None)
+            if val and "output_tokens" not in payload:
+                payload["output_tokens"] = val
+
+        # Response content (truncated)
+        if content:
+            payload["response"] = str(content)[:3000]
+
+        # Model info
+        model = getattr(event, "model", None) or getattr(event, "model_name", None)
+        if model:
+            payload["model"] = str(model)
+
+        # Cost estimation (if available)
+        cost = getattr(event, "cost", None)
+        if cost:
+            payload["cost"] = float(cost)
+
         self._add_event(
             event_type="llm_completed",
             agent_role=agent_role,
             duration_ms=duration_ms,
-            payload={
-                "tokens_used": getattr(event, "tokens_used", None),
-            },
+            payload=payload if payload else None,
         )
 
     def _handle_llm_failed(self, event: Any) -> None:
@@ -388,6 +501,40 @@ class TraceCollector(BaseEventListener if CREWAI_AVAILABLE else object):
         if agent and hasattr(agent, "role"):
             return str(agent.role)
         return "unknown"
+
+    def _truncate_messages(self, messages: Any, max_content_length: int = 1000) -> list[dict[str, Any]]:
+        """Truncate message content while preserving structure."""
+        if not messages:
+            return []
+
+        truncated = []
+        try:
+            for msg in messages:
+                if isinstance(msg, dict):
+                    truncated_msg = {
+                        "role": msg.get("role", "unknown"),
+                        "content": str(msg.get("content", ""))[:max_content_length],
+                    }
+                    if len(str(msg.get("content", ""))) > max_content_length:
+                        truncated_msg["truncated"] = True
+                    truncated.append(truncated_msg)
+                elif hasattr(msg, "role") and hasattr(msg, "content"):
+                    content = str(msg.content)
+                    truncated_msg = {
+                        "role": str(msg.role),
+                        "content": content[:max_content_length],
+                    }
+                    if len(content) > max_content_length:
+                        truncated_msg["truncated"] = True
+                    truncated.append(truncated_msg)
+                else:
+                    # Fallback for unknown message format
+                    truncated.append({"role": "unknown", "content": str(msg)[:max_content_length]})
+        except Exception:
+            # If anything fails, just return a simple representation
+            return [{"role": "unknown", "content": str(messages)[:max_content_length]}]
+
+        return truncated
 
     def _add_event(
         self,
