@@ -451,10 +451,16 @@ export default function ZoomViewPage() {
   const [agentStats, setAgentStats] = useState<Record<string, AgentStats>>({});
   const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
   const [useDemoData, setUseDemoData] = useState(false);
+  const [isLiveMode, setIsLiveMode] = useState(false);
+  const [lastEventId, setLastEventId] = useState<string | null>(null);
   const demoDataRef = useRef<{ traces: TraceSummary[]; events: Map<string, TraceEvent[]> } | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  // Check if selected trace is running
+  const selectedTrace = traces.find((t) => t.trace_id === selectedTraceId);
+  const isTraceRunning = selectedTrace?.status === "running";
 
   // Fetch traces
   useEffect(() => {
@@ -502,6 +508,7 @@ export default function ZoomViewPage() {
         const events = demoDataRef.current.events.get(selectedTraceId) || [];
         setAllEvents(events);
         setPlaybackIndex(0);
+        setLastEventId(events.length > 0 ? events[events.length - 1].event_id : null);
         return;
       }
 
@@ -509,6 +516,9 @@ export default function ZoomViewPage() {
         const detail = await tracesAPI.get(token, selectedTraceId);
         setAllEvents(detail.events);
         setPlaybackIndex(0);
+        setLastEventId(detail.events.length > 0 ? detail.events[detail.events.length - 1].event_id : null);
+        // Enable live mode if trace is running
+        setIsLiveMode(detail.status === "running");
       } catch (error) {
         console.error("Failed to fetch trace events:", error);
       }
@@ -516,7 +526,54 @@ export default function ZoomViewPage() {
     fetchEvents();
   }, [selectedTraceId, token, useDemoData]);
 
-  // Build graph from events
+  // Poll for new events when trace is running (live mode)
+  useEffect(() => {
+    if (!isLiveMode || !selectedTraceId || !token || useDemoData) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const detail = await tracesAPI.get(token, selectedTraceId);
+
+        // Check if there are new events
+        if (detail.events.length > allEvents.length) {
+          const newEvents = detail.events.slice(allEvents.length);
+          console.log(`[Zoom] ${newEvents.length} new events received`);
+
+          // Append new events
+          setAllEvents(detail.events);
+          setLastEventId(detail.events[detail.events.length - 1].event_id);
+
+          // Update trace status in traces list
+          setTraces((prev) =>
+            prev.map((t) =>
+              t.trace_id === selectedTraceId
+                ? { ...t, status: detail.status as "running" | "completed" | "failed", event_count: detail.events.length }
+                : t
+            )
+          );
+        }
+
+        // Stop polling if trace is no longer running
+        if (detail.status !== "running") {
+          setIsLiveMode(false);
+          // Update trace status
+          setTraces((prev) =>
+            prev.map((t) =>
+              t.trace_id === selectedTraceId
+                ? { ...t, status: detail.status as "running" | "completed" | "failed" }
+                : t
+            )
+          );
+        }
+      } catch (error) {
+        console.error("Failed to poll for new events:", error);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [isLiveMode, selectedTraceId, token, useDemoData, allEvents.length]);
+
+  // Build graph from events (preserves stats for existing nodes in live mode)
   useEffect(() => {
     if (allEvents.length === 0) return;
 
@@ -538,22 +595,39 @@ export default function ZoomViewPage() {
       trace?.environment || ""
     );
 
-    setNodes(newNodes);
-    setEdges(newEdges);
+    // Check if we need to add new nodes (live mode - new agents/tools appeared)
+    const currentNodeIds = new Set(nodes.map((n) => n.id));
+    const newNodeIds = new Set(newNodes.map((n) => n.id));
+    const hasNewNodes = newNodes.some((n) => !currentNodeIds.has(n.id));
 
-    // Reset stats
-    const initialStats: Record<string, AgentStats> = {};
-    agents.forEach((a) => {
-      initialStats[`agent-${slugify(a)}`] = { llmCalls: 0, toolCalls: 0, errors: 0 };
-    });
-    setAgentStats(initialStats);
+    if (hasNewNodes || nodes.length === 0) {
+      setNodes(newNodes);
+      setEdges(newEdges);
+    }
 
-    const initialToolCounts: Record<string, number> = {};
-    tools.forEach((t) => {
-      initialToolCounts[`tool-${slugify(t)}`] = 0;
+    // Initialize stats for new agents/tools only (preserve existing stats)
+    setAgentStats((prev) => {
+      const updated = { ...prev };
+      agents.forEach((a) => {
+        const id = `agent-${slugify(a)}`;
+        if (!updated[id]) {
+          updated[id] = { llmCalls: 0, toolCalls: 0, errors: 0 };
+        }
+      });
+      return updated;
     });
-    setToolCounts(initialToolCounts);
-  }, [allEvents, selectedTraceId, traces, setNodes, setEdges]);
+
+    setToolCounts((prev) => {
+      const updated = { ...prev };
+      tools.forEach((t) => {
+        const id = `tool-${slugify(t)}`;
+        if (!(id in updated)) {
+          updated[id] = 0;
+        }
+      });
+      return updated;
+    });
+  }, [allEvents, selectedTraceId, traces, setNodes, setEdges, nodes.length]);
 
   // Playback loop
   useEffect(() => {
@@ -562,15 +636,19 @@ export default function ZoomViewPage() {
     const interval = setInterval(() => {
       setPlaybackIndex((prev) => {
         if (prev >= allEvents.length) {
-          // Loop back or stop
-          return 0;
+          // In live mode, wait at the end for new events
+          // In replay mode, loop back to start
+          if (isLiveMode) {
+            return prev; // Stay at current position, waiting for new events
+          }
+          return 0; // Loop back for completed traces
         }
         return prev + 1;
       });
     }, 800);
 
     return () => clearInterval(interval);
-  }, [isPlaying, allEvents.length]);
+  }, [isPlaying, allEvents.length, isLiveMode]);
 
   // Process current event
   useEffect(() => {
@@ -752,8 +830,6 @@ export default function ZoomViewPage() {
     return "bg-blue-500/20 border-blue-500 text-blue-400";
   };
 
-  const selectedTrace = traces.find((t) => t.trace_id === selectedTraceId);
-
   return (
     <div className="h-[calc(100vh-120px)] relative">
       {/* Header */}
@@ -918,10 +994,16 @@ export default function ZoomViewPage() {
             <span className="text-sm font-medium">
               {playbackIndex} / {allEvents.length} events
             </span>
+            {isLiveMode && (
+              <Badge variant="destructive" className="text-xs py-0 px-1.5 animate-pulse">
+                LIVE
+              </Badge>
+            )}
           </div>
           {selectedTrace && (
             <p className="text-xs text-muted-foreground mt-1">
               {selectedTrace.project_name}
+              {isLiveMode && " • Polling every 2s"}
             </p>
           )}
         </div>
