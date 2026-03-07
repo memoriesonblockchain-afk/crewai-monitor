@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from .deps import CurrentAPIKey, DBSession
 from ..models.usage import UsageDaily
-from ..services.trace_store import trace_store
+from ..services.trace_service import TraceService
 
 router = APIRouter()
 
@@ -23,6 +23,8 @@ class TraceEvent(BaseModel):
     trace_id: str
     event_type: str
     timestamp: float
+    project_name: str = "default"
+    environment: str = "development"
     agent_role: str | None = None
     task_description: str | None = None
     tool_name: str | None = None
@@ -106,6 +108,9 @@ async def ingest_batch(
     errors: list[str] = []
     trace_ids: set[str] = set()
 
+    # Create trace service
+    trace_service = TraceService(db)
+
     for event in batch_request.events:
         try:
             # Validate event
@@ -114,8 +119,8 @@ async def ingest_batch(
                 errors.append(f"Missing event_id or trace_id")
                 continue
 
-            # Store event in trace store
-            trace_store.store_event(
+            # Store event in database
+            await trace_service.store_event(
                 user_id=str(api_key.user_id),
                 event_id=event.event_id,
                 trace_id=event.trace_id,
@@ -140,6 +145,9 @@ async def ingest_batch(
         except Exception as e:
             rejected += 1
             errors.append(str(e))
+
+    # Commit all events
+    await trace_service.commit()
 
     # Update usage tracking
     if accepted > 0:
@@ -166,15 +174,16 @@ async def ingest_single(
         if not event.event_id or not event.trace_id:
             rejected = 1
         else:
-            # Store event in trace store
-            trace_store.store_event(
+            # Store event in database
+            trace_service = TraceService(db)
+            await trace_service.store_event(
                 user_id=str(api_key.user_id),
                 event_id=event.event_id,
                 trace_id=event.trace_id,
                 event_type=event.event_type,
                 timestamp=event.timestamp,
-                project_name="default",
-                environment="development",
+                project_name=event.project_name,
+                environment=event.environment,
                 agent_role=event.agent_role,
                 task_description=event.task_description,
                 tool_name=event.tool_name,
@@ -185,6 +194,7 @@ async def ingest_single(
                 error_message=event.error_message,
                 payload=event.payload,
             )
+            await trace_service.commit()
             accepted = 1
             await update_usage(db, api_key.id, 1, 1, 0)
     except Exception:

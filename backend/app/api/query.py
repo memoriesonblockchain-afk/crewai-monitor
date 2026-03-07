@@ -7,13 +7,14 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from .deps import CurrentUser, DBSession
-from ..services.trace_store import trace_store, StoredEvent, StoredTrace
+from ..services.trace_service import TraceService
+from ..models.trace import Trace, Event
 
 router = APIRouter()
 
 
 # Response schemas
-class TraceEvent(BaseModel):
+class TraceEventResponse(BaseModel):
     """A single trace event."""
 
     event_id: str
@@ -55,7 +56,7 @@ class TraceDetail(BaseModel):
     started_at: datetime
     ended_at: datetime | None
     status: str
-    events: list[TraceEvent]
+    events: list[TraceEventResponse]
     agents: list[str]
     tools_used: list[str]
     error_count: int
@@ -82,8 +83,8 @@ class MetricsSummary(BaseModel):
 
 
 # Helper functions
-def _stored_trace_to_summary(trace: StoredTrace) -> TraceSummary:
-    """Convert a StoredTrace to TraceSummary."""
+def _trace_to_summary(trace: Trace, event_count: int = 0, agent_count: int = 0) -> TraceSummary:
+    """Convert a Trace model to TraceSummary."""
     return TraceSummary(
         trace_id=trace.trace_id,
         project_name=trace.project_name,
@@ -91,18 +92,18 @@ def _stored_trace_to_summary(trace: StoredTrace) -> TraceSummary:
         started_at=trace.started_at,
         ended_at=trace.ended_at,
         status=trace.status,
-        event_count=trace.event_count,
-        agent_count=trace.agent_count,
+        event_count=event_count,
+        agent_count=agent_count,
         error_count=trace.error_count,
         duration_ms=trace.duration_ms,
     )
 
 
-def _stored_event_to_trace_event(event: StoredEvent) -> TraceEvent:
-    """Convert a StoredEvent to TraceEvent."""
-    return TraceEvent(
+def _event_to_response(event: Event, trace_id: str) -> TraceEventResponse:
+    """Convert an Event model to TraceEventResponse."""
+    return TraceEventResponse(
         event_id=event.event_id,
-        trace_id=event.trace_id,
+        trace_id=trace_id,
         event_type=event.event_type,
         timestamp=event.timestamp,
         agent_role=event.agent_role,
@@ -113,7 +114,7 @@ def _stored_event_to_trace_event(event: StoredEvent) -> TraceEvent:
         duration_ms=event.duration_ms,
         error=event.error,
         error_message=event.error_message,
-        payload=event.payload,
+        payload=event.payload or {},
     )
 
 
@@ -124,31 +125,31 @@ async def list_traces(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     status: str | None = None,
-    agent: str | None = None,
-    from_time: datetime | None = None,
-    to_time: datetime | None = None,
 ) -> TraceListResponse:
     """
     List traces with filtering and pagination.
 
     Filters:
     - status: 'running', 'completed', 'failed'
-    - agent: Filter by agent role
-    - from_time: Start of time range
-    - to_time: End of time range
     """
     user_id = str(user.id)
     offset = (page - 1) * page_size
 
-    traces, total = trace_store.get_traces(
+    trace_service = TraceService(db)
+    traces, total = await trace_service.get_traces(
         user_id=user_id,
         status=status,
-        agent=agent,
         limit=page_size,
         offset=offset,
     )
 
-    trace_summaries = [_stored_trace_to_summary(t) for t in traces]
+    # Convert traces to summaries with event counts
+    trace_summaries = []
+    for trace in traces:
+        # Get event count and unique agents for each trace
+        events = await trace_service.get_trace_events(user_id, trace.trace_id)
+        agents = set(e.agent_role for e in events if e.agent_role)
+        trace_summaries.append(_trace_to_summary(trace, len(events), len(agents)))
 
     return TraceListResponse(
         traces=trace_summaries,
@@ -158,75 +159,16 @@ async def list_traces(
     )
 
 
-@router.get("/{trace_id}", response_model=TraceDetail)
-async def get_trace(
-    trace_id: str,
-    user: CurrentUser,
-    db: DBSession,
-) -> TraceDetail:
-    """Get detailed information about a specific trace."""
-    user_id = str(user.id)
-
-    trace = trace_store.get_trace(user_id, trace_id)
-
-    if not trace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Trace {trace_id} not found",
-        )
-
-    events = [_stored_event_to_trace_event(e) for e in trace.events]
-
-    return TraceDetail(
-        trace_id=trace.trace_id,
-        project_name=trace.project_name,
-        environment=trace.environment,
-        started_at=trace.started_at,
-        ended_at=trace.ended_at,
-        status=trace.status,
-        events=events,
-        agents=trace.agents,
-        tools_used=trace.tools_used,
-        error_count=trace.error_count,
-    )
-
-
-@router.get("/{trace_id}/events", response_model=list[TraceEvent])
-async def get_trace_events(
-    trace_id: str,
-    user: CurrentUser,
-    db: DBSession,
-    event_type: str | None = None,
-    agent: str | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-) -> list[TraceEvent]:
-    """Get events for a specific trace with filtering."""
-    user_id = str(user.id)
-
-    events = trace_store.get_trace_events(
-        user_id=user_id,
-        trace_id=trace_id,
-        event_type=event_type,
-        agent=agent,
-        limit=limit,
-        offset=offset,
-    )
-
-    return [_stored_event_to_trace_event(e) for e in events]
-
-
 @router.get("/metrics/summary", response_model=MetricsSummary)
 async def get_metrics_summary(
     user: CurrentUser,
     db: DBSession,
-    from_time: datetime | None = None,
-    to_time: datetime | None = None,
 ) -> MetricsSummary:
     """Get aggregated metrics summary."""
     user_id = str(user.id)
 
-    metrics = trace_store.get_metrics(user_id)
+    trace_service = TraceService(db)
+    metrics = await trace_service.get_metrics(user_id)
 
     return MetricsSummary(
         total_traces=metrics["total_traces"],
@@ -245,7 +187,8 @@ async def list_agents(
 ) -> list[str]:
     """List all unique agent roles seen."""
     user_id = str(user.id)
-    return trace_store.get_all_agents(user_id)
+    trace_service = TraceService(db)
+    return await trace_service.get_agents(user_id)
 
 
 @router.get("/tools", response_model=list[str])
@@ -255,4 +198,63 @@ async def list_tools(
 ) -> list[str]:
     """List all unique tools used."""
     user_id = str(user.id)
-    return trace_store.get_all_tools(user_id)
+    trace_service = TraceService(db)
+    return await trace_service.get_tools(user_id)
+
+
+@router.get("/{trace_id}", response_model=TraceDetail)
+async def get_trace(
+    trace_id: str,
+    user: CurrentUser,
+    db: DBSession,
+) -> TraceDetail:
+    """Get detailed information about a specific trace."""
+    user_id = str(user.id)
+
+    trace_service = TraceService(db)
+    trace = await trace_service.get_trace(user_id, trace_id)
+
+    if not trace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Trace {trace_id} not found",
+        )
+
+    events = [_event_to_response(e, trace_id) for e in trace.events]
+    agents = list(set(e.agent_role for e in trace.events if e.agent_role))
+    tools_used = list(set(e.tool_name for e in trace.events if e.tool_name))
+
+    return TraceDetail(
+        trace_id=trace.trace_id,
+        project_name=trace.project_name,
+        environment=trace.environment,
+        started_at=trace.started_at,
+        ended_at=trace.ended_at,
+        status=trace.status,
+        events=events,
+        agents=agents,
+        tools_used=tools_used,
+        error_count=trace.error_count,
+    )
+
+
+@router.get("/{trace_id}/events", response_model=list[TraceEventResponse])
+async def get_trace_events(
+    trace_id: str,
+    user: CurrentUser,
+    db: DBSession,
+    event_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> list[TraceEventResponse]:
+    """Get events for a specific trace with filtering."""
+    user_id = str(user.id)
+
+    trace_service = TraceService(db)
+    events = await trace_service.get_trace_events(
+        user_id=user_id,
+        trace_id=trace_id,
+        event_type=event_type,
+        limit=limit,
+    )
+
+    return [_event_to_response(e, trace_id) for e in events]
