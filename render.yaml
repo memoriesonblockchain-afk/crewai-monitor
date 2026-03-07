@@ -1,13 +1,32 @@
 # Render.com Blueprint Specification
 # https://render.com/docs/blueprint-spec
+#
+# Deploy: https://render.com/deploy?repo=https://github.com/memoriesonblockchain-afk/crewai-monitor
+#
+# NOTE: Render's DATABASE_URL uses 'postgres://' but SQLAlchemy async needs 'postgresql+asyncpg://'
+# The backend automatically converts this in config.py
+
+databases:
+  - name: crewai-monitor-db
+    region: oregon
+    plan: free  # Use 'starter' ($7/mo) for production
+    databaseName: crewai_monitor
+    user: crewai
 
 services:
+  # Redis for caching and real-time features
+  - type: redis
+    name: crewai-monitor-redis
+    region: oregon
+    plan: free  # Use 'starter' ($10/mo) for production
+    maxmemoryPolicy: allkeys-lru
+
   # FastAPI Backend API
   - type: web
     name: crewai-monitor-api
     runtime: python
     region: oregon
-    plan: free
+    plan: free  # Use 'starter' ($7/mo) for production
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -17,6 +36,11 @@ services:
         fromDatabase:
           name: crewai-monitor-db
           property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: crewai-monitor-redis
+          type: redis
+          property: connectionString
       - key: SECRET_KEY
         generateValue: true
       - key: DEBUG
@@ -24,26 +48,25 @@ services:
       - key: ENVIRONMENT
         value: "production"
       - key: CORS_ORIGINS_STR
-        value: "https://crewai-monitor-dashboard.onrender.com,http://localhost:3000"
+        fromService:
+          name: crewai-monitor-dashboard
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
 
   # Next.js Dashboard
   - type: web
     name: crewai-monitor-dashboard
     runtime: node
     region: oregon
-    plan: free
+    plan: free  # Use 'starter' ($7/mo) for production
     rootDir: dashboard
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: "https://crewai-monitor-api.onrender.com"
+        fromService:
+          name: crewai-monitor-api
+          type: web
+          property: url
       - key: NODE_ENV
         value: "production"
-
-databases:
-  - name: crewai-monitor-db
-    region: oregon
-    plan: free
-    databaseName: crewai_monitor
-    user: crewai
