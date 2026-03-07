@@ -20,6 +20,7 @@ services:
     region: oregon
     plan: free  # Use 'starter' ($10/mo) for production
     maxmemoryPolicy: allkeys-lru
+    ipAllowList: []  # Allow all IPs (required by Render)
 
   # FastAPI Backend API
   - type: web
@@ -48,10 +49,7 @@ services:
       - key: ENVIRONMENT
         value: "production"
       - key: CORS_ORIGINS_STR
-        fromService:
-          name: crewai-monitor-dashboard
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
+        value: "https://crewai-monitor-dashboard.onrender.com,http://localhost:3000"
 
   # Next.js Dashboard
   - type: web
@@ -64,9 +62,6 @@ services:
     startCommand: npm start
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          name: crewai-monitor-api
-          type: web
-          property: url
+        value: "https://crewai-monitor-api.onrender.com"
       - key: NODE_ENV
         value: "production"
